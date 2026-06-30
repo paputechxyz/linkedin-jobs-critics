@@ -43,13 +43,25 @@ def fetch_jobs() -> list[dict]:
 
 
 @tool
-def linkedin_jobs_search(keywords: str, location: str) -> str:
+def linkedin_jobs_search(
+    keywords: str,
+    location: str,
+    extra_search_args: list[str] | None = None,
+) -> str:
     """Search LinkedIn jobs and populate/refresh the local DB via the
     linkedin-jobs CLI. Force-overwrites jobs already stored (re-parses and
     re-scores them). Returns a compact JSON summary {"count": N, "ids": [...]}.
-    Use this to run a search for the given keywords and location."""
+    Use this to run a search for the given keywords and location.
+
+    If extra_search_args is provided, pass each string verbatim as an
+    additional flag to the underlying CLI (e.g. ["--min-salary=200k",
+    "--top=1"]). Do not interpret or modify them."""
+    extra = list(extra_search_args or [])
     try:
-        proc = _run(["search", keywords, location, "--force-overwrite", "--json"], timeout=180)
+        proc = _run(
+            ["search", keywords, location, *extra, "--force-overwrite", "--json"],
+            timeout=180,
+        )
     except subprocess.TimeoutExpired:
         return "ERROR: linkedin-jobs search timed out after 180s"
     except FileNotFoundError:

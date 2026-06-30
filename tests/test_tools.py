@@ -55,3 +55,28 @@ def test_search_tool_uses_force_overwrite_flag(monkeypatch):
 
     assert "--force-overwrite" in captured["args"]
     assert "--json" in captured["args"]
+
+
+def test_search_tool_passes_extra_args_through(monkeypatch):
+    captured = {}
+
+    def fake_run(args, timeout=180):
+        captured["args"] = args
+        return FakeProc(stdout="[]")
+
+    monkeypatch.setattr(tools, "_run", fake_run)
+    tools.linkedin_jobs_search.invoke(
+        {
+            "keywords": "Staff Eng",
+            "location": "Toronto",
+            "extra_search_args": ["--min-salary=200k", "--top=1"],
+        }
+    )
+
+    args = captured["args"]
+    assert args[:3] == ["search", "Staff Eng", "Toronto"]
+    assert "--min-salary=200k" in args
+    assert "--top=1" in args
+    # reserved flags still present and after user flags
+    assert args.index("--force-overwrite") > args.index("--top=1")
+    assert args.index("--json") > args.index("--min-salary=200k")

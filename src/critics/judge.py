@@ -2,11 +2,16 @@
 
 The judge has no tools; it uses ChatOpenAI.with_structured_output for
 provider-enforced structured findings (more reliable than prompt-parsed JSON).
+Falls back to a defensive JSON extractor for providers that don't honor
+structured-output modes (notably some z.ai / glm-5.2 endpoints).
 """
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+import re
+
+from pydantic import BaseModel, Field, ValidationError
+from langchain_core.exceptions import OutputParserException
 from langchain_openai import ChatOpenAI
 
 PARSED_FIELDS = ("salary", "location", "remote_type", "title", "company")
@@ -18,7 +23,15 @@ JUDGE_SYSTEM = (
     "When a field is inconsistent, name where the value should be sourced/fixed "
     "(e.g. salary often comes from the page's rounded card band while the real "
     "base salary is in the description body — point at the salary source). "
-    "Assess every one of: salary, location, remote_type, title, company."
+    "Assess every one of: salary, location, remote_type, title, company. "
+    "Respond in JSON."
+)
+
+JSON_FALLBACK_INSTRUCTION = (
+    "Respond with ONLY a single JSON object matching the CritiqueReport schema: "
+    '{"job_id": str, "title": str, "findings": [{"field": str, '
+    '"stored_value": str, "evidence_quote": str, "is_consistent": bool, '
+    '"suggested_fix": str|null}]}. No markdown, no code fences, no prose.'
 )
 
 
@@ -73,14 +86,36 @@ def _job_payload(job: dict) -> str:
     )
 
 
+def _extract_json(text: str) -> str | None:
+    """Pull the first JSON object out of a possibly-markdown-wrapped response."""
+    m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+    if m:
+        return m.group(1)
+    m = re.search(r"\{.*\}", text, re.DOTALL)
+    if m:
+        return m.group(0)
+    return None
+
+
 def judge_job(job: dict, llm: ChatOpenAI) -> CritiqueReport:
-    structured = llm.with_structured_output(CritiqueReport, method="json_schema")
-    report = structured.invoke(
-        [
-            {"role": "system", "content": JUDGE_SYSTEM},
-            {"role": "user", "content": _job_payload(job)},
-        ]
-    )
+    messages = [
+        {"role": "system", "content": JUDGE_SYSTEM},
+        {"role": "user", "content": _job_payload(job)},
+    ]
+    try:
+        structured = llm.with_structured_output(CritiqueReport, method="json_mode")
+        report = structured.invoke(messages)
+    except (OutputParserException, ValidationError, ValueError) as e:
+        raw = llm.invoke(
+            messages + [{"role": "system", "content": JSON_FALLBACK_INSTRUCTION}]
+        ).content
+        extracted = _extract_json(raw)
+        if not extracted:
+            raise RuntimeError(
+                f"judge returned no JSON; head={raw[:300]!r}"
+            ) from e
+        report = CritiqueReport.model_validate_json(extracted)
+
     report.job_id = str(job.get("id", report.job_id))
     if not getattr(report, "title", ""):
         report.title = job.get("title", "")

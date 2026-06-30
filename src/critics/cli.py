@@ -7,6 +7,7 @@ write an improvement-plan MD. One-shot; no loop.
 from __future__ import annotations
 
 import argparse
+import shlex
 import sys
 
 from .config import NoProviderError, load_llm
@@ -18,9 +19,21 @@ from .tools import fetch_jobs
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="critics", description=__doc__)
-    parser.add_argument("keywords", help="Search keywords, e.g. 'Senior Engineer'")
+    parser.add_argument(
+        "keywords",
+        nargs="?",
+        default="Senior Software Engineer",
+        help="Search keywords (default: 'Senior Software Engineer')",
+    )
     parser.add_argument("location", help="Search location, e.g. 'Toronto'")
     parser.add_argument("-o", "--out", default="improvement-plan.md", help="Output MD path")
+    parser.add_argument(
+        "--search-args",
+        default=None,
+        metavar='"FLAGS"',
+        help="Extra flags to pass through to `linkedin-jobs search`, as a single "
+        "shell-style string (e.g. --search-args \"--min-salary 200k --top 1\")",
+    )
     parser.add_argument(
         "--skip-search",
         action="store_true",
@@ -39,8 +52,11 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     if not args.skip_search:
+        extra = shlex.split(args.search_args) if args.search_args else []
         print(f"Search agent: searching {args.keywords!r} @ {args.location!r}...", file=sys.stderr)
-        summary = run_search(llm, args.keywords, args.location)
+        if extra:
+            print(f"  extra search flags: {extra}", file=sys.stderr)
+        summary = run_search(llm, args.keywords, args.location, extra)
         print(summary, file=sys.stderr)
 
     jobs = fetch_jobs()

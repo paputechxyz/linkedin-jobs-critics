@@ -21,8 +21,8 @@ uv sync            # or: python -m venv .venv && .venv/bin/pip install -e ".[dev
 Build the Go CLI and put it on your `PATH` (or set `LJ_BIN_PATH`):
 
 ```bash
-( cd ../critics && go build -o linkedin-jobs . )
-export PATH="$PWD/../critics:$PATH"
+( cd ../linkedin-job-cli && go build -o linkedin-jobs . )
+export PATH="$PWD/../linkedin-job-cli:$PATH"
 ```
 
 Configure an OpenAI-compatible LLM provider once (shared with the Go CLI):
@@ -34,13 +34,26 @@ linkedin-jobs config llm        # or: export OPENAI_API_KEY=sk-...
 ## Run
 
 ```bash
-critics "Senior Engineer" Toronto -o improvement-plan.md
+uv run critics Toronto -o improvement-plan.md
+```
+
+Keywords default to `Senior Software Engineer`; pass your own to override:
+
+```bash
+uv run critics "Senior Software Engineer" Toronto -o improvement-plan.md
+```
+
+Extra `linkedin-jobs search` flags can be passed through as a single quoted string with `--search-args`:
+
+```bash
+uv run critics "Staff Software Engineer" Toronto \
+  --search-args "--min-salary 200k --top 1"
 ```
 
 To judge jobs already in the DB without running a fresh search:
 
 ```bash
-critics "Senior Engineer" Toronto --skip-search
+uv run critics Toronto --skip-search
 ```
 
 ## Config

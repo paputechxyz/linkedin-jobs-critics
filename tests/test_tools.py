@@ -92,3 +92,32 @@ def test_score_job_raises_on_non_json(monkeypatch):
     monkeypatch.setattr(tools, "_run", lambda args, timeout=180: FakeProc(stdout="not json"))
     with pytest.raises(RuntimeError):
         tools.score_job("4259504707")
+
+
+def test_cli_version_returns_stdout_stripped(monkeypatch):
+    monkeypatch.setattr(
+        tools, "_run", lambda args, timeout=30: FakeProc(stdout="0.1.1\n")
+    )
+    assert tools.cli_version() == "0.1.1"
+
+
+def test_cli_version_passes_version_subcommand(monkeypatch):
+    captured = {}
+
+    def fake_run(args, timeout=30):
+        captured["args"] = args
+        return FakeProc(stdout="0.1.1")
+
+    monkeypatch.setattr(tools, "_run", fake_run)
+    tools.cli_version()
+
+    assert captured["args"] == ["version"]
+
+
+def test_cli_version_returns_empty_on_failure(monkeypatch):
+    monkeypatch.setattr(
+        tools,
+        "_run",
+        lambda args, timeout=30: FakeProc(stderr="boom", returncode=1),
+    )
+    assert tools.cli_version() == ""

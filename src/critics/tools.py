@@ -60,3 +60,12 @@ def score_job(job_id: str) -> dict:
             f"(exit {proc.returncode}): {proc.stderr.strip()[:500]}"
         )
     return job
+
+
+def cli_version() -> str:
+    """Return the linkedin-jobs binary's version string via `linkedin-jobs
+    version`, stripped. Empty string on any CLI failure (non-zero exit / no
+    stdout). Used by the agent loop to detect whether the binary was rebuilt
+    between rounds."""
+    proc = _run(["version"], timeout=30)
+    return proc.stdout.strip()

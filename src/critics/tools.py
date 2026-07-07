@@ -1,8 +1,8 @@
 """Subprocess wrappers around the linkedin-jobs Go CLI.
 
-The search step is exposed as a langchain @tool for the search agent; the job
-list is read directly by the orchestrator (the judge is a function, not an
-agent, so it does not need a tool).
+Single-job operations only: look up a stored job with `show`, or fetch + score
+a fresh one with `score-job`. The judge is a plain function (not an agent) and
+calls these helpers directly.
 """
 
 from __future__ import annotations
@@ -11,8 +11,6 @@ import json
 import os
 import shutil
 import subprocess
-
-from langchain.tools import tool
 
 
 def binary() -> str:
@@ -29,47 +27,36 @@ def _run(args: list[str], timeout: int = 180) -> subprocess.CompletedProcess[str
     )
 
 
-def fetch_jobs() -> list[dict]:
-    """Read every stored job as JSON via `list --json`."""
-    proc = _run(["list", "--json"], timeout=60)
-    if proc.returncode != 0:
-        raise RuntimeError(
-            f"linkedin-jobs list failed (exit {proc.returncode}): {proc.stderr.strip()[:500]}"
-        )
-    try:
-        return json.loads(proc.stdout)
-    except json.JSONDecodeError as e:
-        raise RuntimeError(f"linkedin-jobs list returned non-JSON: {e}") from e
-
-
-@tool
-def linkedin_jobs_search(
-    keywords: str,
-    location: str,
-    extra_search_args: list[str] | None = None,
-) -> str:
-    """Search LinkedIn jobs and populate/refresh the local DB via the
-    linkedin-jobs CLI. Force-overwrites jobs already stored (re-parses and
-    re-scores them). Returns a compact JSON summary {"count": N, "ids": [...]}.
-    Use this to run a search for the given keywords and location.
-
-    If extra_search_args is provided, pass each string verbatim as an
-    additional flag to the underlying CLI (e.g. ["--min-salary=200k",
-    "--top=1"]). Do not interpret or modify them."""
-    extra = list(extra_search_args or [])
-    try:
-        proc = _run(
-            ["search", keywords, location, *extra, "--force-overwrite", "--json"],
-            timeout=180,
-        )
-    except subprocess.TimeoutExpired:
-        return "ERROR: linkedin-jobs search timed out after 180s"
-    except FileNotFoundError:
-        return "ERROR: linkedin-jobs binary not found on PATH (set LJ_BIN_PATH)"
-    if proc.returncode != 0:
-        return f"ERROR (exit {proc.returncode}): {proc.stderr.strip()[:2000]}"
+def _parse_job(proc: subprocess.CompletedProcess[str]) -> dict | None:
+    """Return the parsed job dict from a `show`/`score-job` JSON result, or
+    None on any non-zero exit / empty / non-JSON output."""
+    if proc.returncode != 0 or not proc.stdout.strip():
+        return None
     try:
         data = json.loads(proc.stdout)
-    except json.JSONDecodeError as e:
-        return f"ERROR: non-JSON output ({e}); head={proc.stdout[:500]!r}"
-    return json.dumps({"count": len(data), "ids": [j.get("id") for j in data]})
+    except json.JSONDecodeError:
+        return None
+    if isinstance(data, list):
+        return data[0] if data else None
+    return data
+
+
+def show_job(job_id: str) -> dict | None:
+    """Return a stored job by id via `linkedin-jobs show <id> --json`, or None
+    if it is not in the DB (or any CLI error)."""
+    proc = _run(["show", str(job_id), "--json"], timeout=60)
+    return _parse_job(proc)
+
+
+def score_job(job_id: str) -> dict:
+    """Fetch + score a single LinkedIn job by id via `linkedin-jobs score-job
+    <id> --json`. Always (re-)fetches and (re-)scores. Raises RuntimeError on
+    failure."""
+    proc = _run(["score-job", str(job_id), "--json"], timeout=180)
+    job = _parse_job(proc)
+    if job is None:
+        raise RuntimeError(
+            f"linkedin-jobs score-job {job_id} failed "
+            f"(exit {proc.returncode}): {proc.stderr.strip()[:500]}"
+        )
+    return job

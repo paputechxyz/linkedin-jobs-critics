@@ -4,8 +4,8 @@
 
 ## Findings
 
-### Staff Software Engineer (`4380826388`) - salary
+### Member of Technical Staff, Post-Training (`4259504707`) - salary
 
-- **Stored value:** $212,500.00 - $287,500.00
-- **Evidence (from description):** > $205,600 - $257,000 CAD in Toronto, Ontario, Canada
-- **Suggested fix:** The stored salary range ($212,500 - $287,500) does not match the ground truth. Source the salary from the description body under the 'Salary / Benefits' section, which states '$205,600 - $257,000 CAD in Toronto, Ontario, Canada'. Note the currency is CAD, and both the low and high ends differ from what was stored.
+- **Stored value:** $225,000.00 - $550,000.00
+- **Evidence (from description):** > 
+- **Suggested fix:** The salary range '$225,000.00 - $550,000.00' does not appear anywhere in the full description body. The description only mentions stipends and benefits (e.g., '$75/£75 weekly lunch stipend', '$500 home office stipend'). This value likely originates from the LinkedIn page's rounded card band element, not the description text. If the card band is unavailable or unreliable, salary should be set to null since no salary information exists in the ground-truth description.

@@ -11,9 +11,15 @@ stops. One-shot per job id; the loop is the agent round-trip.
 from __future__ import annotations
 
 import argparse
+import pathlib
 import sys
 
-from .agent import build_handoff_prompt, launch_agent_session, sibling_cli_dir
+from .agent import (
+    build_handoff_prompt,
+    launch_agent_session,
+    latest_session_id,
+    sibling_cli_dir,
+)
 from .config import NoProviderError, load_llm
 from .judge import CritiqueReport, judge_job
 from .report import write_report
@@ -37,9 +43,21 @@ def _inconsistent(report: CritiqueReport) -> list:
     return [f for f in report.findings if not f.is_consistent]
 
 
+def _print_plan(out_path: str) -> None:
+    """Print the improvement-plan contents to the terminal so the user can
+    review at the gate without opening the file."""
+    try:
+        content = pathlib.Path(out_path).read_text()
+    except OSError:
+        return
+    print("\n----- improvement plan -----", file=sys.stderr)
+    print(content, file=sys.stderr)
+    print("------------------------------\n", file=sys.stderr)
+
+
 def _judge_and_write(job: dict, llm, out_path: str) -> CritiqueReport | None:
-    """Judge the job and write its improvement plan. Returns the report, or
-    None if judging failed (caller exits non-zero)."""
+    """Judge the job, write its improvement plan, and print the plan inline.
+    Returns the report, or None if judging failed (caller exits non-zero)."""
     print(f"Critics: judging job {job.get('id', '?')}...", file=sys.stderr)
     try:
         report = judge_job(job, llm)
@@ -47,6 +65,7 @@ def _judge_and_write(job: dict, llm, out_path: str) -> CritiqueReport | None:
         print(f"  ! judge failed: {e}", file=sys.stderr)
         return None
     write_report([report], out_path)
+    _print_plan(out_path)
     return report
 
 
@@ -90,9 +109,13 @@ def main(argv: list[str] | None = None) -> int:
         print("No defects found; nothing to fix.", file=sys.stderr)
         return 0
 
-    # judge→fix→re-judge loop, user-gated each round
-    history: list[dict] = []
+    # judge→fix→re-judge loop, user-gated each round.
+    # Round 1 starts a fresh opencode session; rounds 2+ RESUME it via
+    # --session <id> so the agent keeps its full transcript across rounds.
+    session_id: str | None = None
+    round_num = 0
     while True:
+        round_num += 1
         if not _prompt_proceed():
             print("Stopping; no agent spawned.", file=sys.stderr)
             return 0
@@ -103,11 +126,18 @@ def main(argv: list[str] | None = None) -> int:
             print(str(e), file=sys.stderr)
             return 1
 
-        version_before = cli_version()
-        fields_attempted = [f.field for f in defects]
+        prompt = build_handoff_prompt(report, round_num=round_num)
+        print(
+            f"\n----- opencode prompt (round {round_num}"
+            f"{', resuming session ' + session_id if session_id else ', new session'})"
+            f" -----",
+            file=sys.stderr,
+        )
+        print(prompt, file=sys.stderr)
+        print("-" * 60 + "\n", file=sys.stderr)
         print(
             f"Critics: launching opencode agent in {repo_path} "
-            f"(round {len(history) + 1})...",
+            f"(round {round_num})...",
             file=sys.stderr,
         )
         print(
@@ -116,8 +146,9 @@ def main(argv: list[str] | None = None) -> int:
             "re-judge. Do NOT Ctrl+C — that kills critics too.",
             file=sys.stderr,
         )
+        version_before = cli_version()
         try:
-            launch_agent_session(repo_path, build_handoff_prompt(report, history))
+            launch_agent_session(repo_path, prompt, session_id=session_id)
         except KeyboardInterrupt:
             print(
                 "\nCritics: agent session interrupted (Ctrl+C). "
@@ -125,6 +156,16 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return 1
+
+        # After round 1's session exits, capture its id so rounds 2+ can resume.
+        if session_id is None:
+            session_id = latest_session_id(repo_path)
+            if session_id is None:
+                print(
+                    "Critics: could not capture opencode session id; the next "
+                    "round will start a fresh session (no cross-round memory).",
+                    file=sys.stderr,
+                )
 
         version_after = cli_version()
         if version_after == version_before or version_after == "dev":
@@ -151,24 +192,16 @@ def main(argv: list[str] | None = None) -> int:
         if report is None:
             return 1
 
-        new_defects = _inconsistent(report)
-        history.append(
-            {
-                "round": len(history) + 1,
-                "fields_attempted": fields_attempted,
-                "fields_still_failing": [f.field for f in new_defects],
-            }
-        )
-
-        if not new_defects:
+        defects = _inconsistent(report)
+        if not defects:
             print(
                 "Critics: re-judge clean — all defects resolved. Stopping.",
                 file=sys.stderr,
             )
             return 0
 
-        defects = new_defects
-        # loop back: re-prompt with the fresh plan + accumulated history
+        # loop back: re-prompt with the fresh plan; next round resumes the
+        # captured opencode session and sends a concise follow-up prompt.
 
 
 if __name__ == "__main__":

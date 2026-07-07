@@ -37,7 +37,9 @@ class Loop:
         self.input_calls = 0
 
         self.captured_prompts: list[str] = []
+        self.captured_session_ids: list = []
         self.written_reports: list[list] = []
+        self.next_session_id = "ses_test123"
 
 
 @pytest.fixture
@@ -58,10 +60,14 @@ def loop(monkeypatch, tmp_path):
         state.score_calls += 1
         return {"id": jid, "title": "Eng", "description": "d"}
 
-    def fake_launch(path, prompt):
+    def fake_launch(path, prompt, session_id=None):
         state.launch_calls += 1
         state.captured_prompts.append(prompt)
+        state.captured_session_ids.append(session_id)
         return 0
+
+    def fake_latest_session_id(path):
+        return state.next_session_id
 
     def fake_cli_version():
         state.version_calls += 1
@@ -79,6 +85,7 @@ def loop(monkeypatch, tmp_path):
     monkeypatch.setattr(cli, "score_job", fake_score_job)
     monkeypatch.setattr(cli, "sibling_cli_dir", lambda: pathlib.Path("/fake/repo"))
     monkeypatch.setattr(cli, "launch_agent_session", fake_launch)
+    monkeypatch.setattr(cli, "latest_session_id", fake_latest_session_id)
     monkeypatch.setattr(cli, "cli_version", fake_cli_version)
     monkeypatch.setattr("builtins.input", fake_input)
 
@@ -130,7 +137,7 @@ def test_ctrl_c_during_session_stops_gracefully(monkeypatch, loop):
     loop.judge_reports = [_report([_finding("salary")])]
     loop.inputs = ["y"]
 
-    def raise_kb(path, prompt):
+    def raise_kb(path, prompt, session_id=None):
         loop.launch_calls += 1
         raise KeyboardInterrupt
     monkeypatch.setattr(cli, "launch_agent_session", raise_kb)
@@ -221,10 +228,10 @@ def test_defective_rejudge_then_decline(loop):
     assert loop.judge_calls == 2
 
 
-# --- round context (R8) ---
+# --- round 2 resumes the same opencode session with a follow-up (R8) ---
 
 
-def test_round2_prompt_includes_prior_history(loop):
+def test_round2_resumes_session_with_followup(loop):
     loop.judge_reports = [
         _report([_finding("salary")]),
         _report([_finding("salary")]),  # round-1 re-judge: still defective
@@ -236,10 +243,14 @@ def test_round2_prompt_includes_prior_history(loop):
 
     assert rc == 0
     assert len(loop.captured_prompts) == 2
-    assert "Prior rounds" not in loop.captured_prompts[0]
-    assert "Prior rounds" in loop.captured_prompts[1]
-    assert "round 1" in loop.captured_prompts[1]
-    assert "salary" in loop.captured_prompts[1]
+    # round 1: new session (session_id=None), full prompt
+    assert loop.captured_session_ids[0] is None
+    assert "You are fixing parsing defects" in loop.captured_prompts[0]
+    # round 2: resumes the captured session id, concise follow-up prompt
+    assert loop.captured_session_ids[1] == "ses_test123"
+    assert "Round 2" in loop.captured_prompts[1]
+    assert "STILL inconsistent" in loop.captured_prompts[1]
+    assert "You are fixing parsing defects" not in loop.captured_prompts[1]
 
 
 # --- full re-judge surfaces regressions (R12, AE3) ---

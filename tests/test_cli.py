@@ -126,6 +126,22 @@ def test_user_empty_answer_means_no(loop):
     assert loop.launch_calls == 0
 
 
+def test_ctrl_c_during_session_stops_gracefully(monkeypatch, loop):
+    loop.judge_reports = [_report([_finding("salary")])]
+    loop.inputs = ["y"]
+
+    def raise_kb(path, prompt):
+        loop.launch_calls += 1
+        raise KeyboardInterrupt
+    monkeypatch.setattr(cli, "launch_agent_session", raise_kb)
+
+    rc = run_cli(loop)
+
+    assert rc == 1
+    assert loop.launch_calls == 1
+    assert loop.score_calls == 0  # no re-score after interruption
+
+
 # --- version check (R15, AE4) ---
 
 

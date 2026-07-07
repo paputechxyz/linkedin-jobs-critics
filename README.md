@@ -1,12 +1,15 @@
 # linkedin-jobs-critics
 
-A one-shot langchain critic that checks whether the [`linkedin-jobs`](https://github.com/paputechxyz/linkedin-job-cli) Go CLI parsed each job's fields correctly, by comparing stored parsed values against the job's full description. It writes an improvement-plan markdown file of findings for a human to fix by hand.
+A one-shot langchain critic that checks whether the [`linkedin-jobs`](https://github.com/paputechxyz/linkedin-job-cli) Go CLI parsed a single job's fields correctly, by comparing stored parsed values against the job's full description. It writes an improvement-plan markdown file of findings for a human to fix by hand.
 
 ## What it does
 
-1. **Search agent** runs `linkedin-jobs search <keywords> <location> --force-overwrite --json` to populate/refresh the DB. The `--force-overwrite` flag (added by this feature) bypasses dedup so already-stored jobs are re-parsed + re-scored + overwritten.
-2. **Critics judge** reads every stored job (`list --json`) and, for each parsed field (`salary`, `location`, `remote_type`, `title`, `company`), decides whether the stored value agrees with the full description — the ground truth — using an LLM with provider-enforced structured output.
-3. **Improvement-plan MD** lists each defect with the stored value, a verbatim quote from the description as evidence, and the source location to fix. If nothing is wrong, it says so.
+Given a LinkedIn **job id**, critics:
+
+1. **Looks it up** in the local DB via `linkedin-jobs show <id> --json`.
+2. **Fetches if missing** — if the job isn't stored, critics runs `linkedin-jobs score-job <id>` to fetch + score it first, then reads it back.
+3. **Critics judge** compares each parsed field (`salary`, `location`, `remote_type`, `title`, `company`) against the full description — the ground truth — using an LLM with provider-enforced structured output.
+4. **Improvement-plan MD** lists each defect with the stored value, a verbatim quote from the description as evidence, and the source location to fix. If nothing is wrong, it says so.
 
 No loop, no coding agent. You apply the fixes by hand.
 
@@ -34,27 +37,11 @@ linkedin-jobs config llm        # or: export OPENAI_API_KEY=sk-...
 ## Run
 
 ```bash
-uv run critics Toronto -o improvement-plan.md
+uv run critics 4259504707 -o improvement-plan.md
 ```
 
-Keywords default to `Senior Software Engineer`; pass your own to override:
-
-```bash
-uv run critics "Senior Software Engineer" Toronto -o improvement-plan.md
-```
-
-Extra `linkedin-jobs search` flags can be passed through as a single quoted string with `--search-args`:
-
-```bash
-uv run critics "Staff Software Engineer" Toronto \
-  --search-args "--min-salary 200k --top 1"
-```
-
-To judge jobs already in the DB without running a fresh search:
-
-```bash
-uv run critics Toronto --skip-search
-```
+If the job is already in the DB it is judged immediately; otherwise critics runs
+`linkedin-jobs score-job <id>` to fetch + score it first, then judges it.
 
 ## Config
 

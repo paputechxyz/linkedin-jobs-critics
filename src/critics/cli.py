@@ -110,7 +110,21 @@ def main(argv: list[str] | None = None) -> int:
             f"(round {len(history) + 1})...",
             file=sys.stderr,
         )
-        launch_agent_session(repo_path, build_handoff_prompt(report, history))
+        print(
+            "  When the agent is done, EXIT opencode with /exit (or /q, or "
+            "Ctrl+x then q) to return to critics, which will re-score + "
+            "re-judge. Do NOT Ctrl+C — that kills critics too.",
+            file=sys.stderr,
+        )
+        try:
+            launch_agent_session(repo_path, build_handoff_prompt(report, history))
+        except KeyboardInterrupt:
+            print(
+                "\nCritics: agent session interrupted (Ctrl+C). "
+                "Stopping without re-score.",
+                file=sys.stderr,
+            )
+            return 1
 
         version_after = cli_version()
         if version_after == version_before or version_after == "dev":

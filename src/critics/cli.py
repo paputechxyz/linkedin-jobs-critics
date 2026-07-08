@@ -6,24 +6,22 @@ description -> write an improvement-plan MD. If defects are found, prompt the
 user; on yes, launch an interactive opencode session in the sibling
 linkedin-job-cli repo, then re-score + re-judge. Loop until clean or the user
 stops. One-shot per job id; the loop is the agent round-trip.
+
+The loop itself is implemented as a LangGraph state machine in `graph.py`;
+this module owns arg parsing, the LLM config, the human-prompt, and the
+invoke/resume driver.
 """
 
 from __future__ import annotations
 
 import argparse
-import pathlib
+import os
 import sys
 
-from .agent import (
-    build_handoff_prompt,
-    launch_agent_session,
-    latest_session_id,
-    sibling_cli_dir,
-)
+from langgraph.types import Command
+
 from .config import NoProviderError, load_llm
-from .judge import CritiqueReport, header_tag_finding, judge_job
-from .report import write_report
-from .tools import cli_version, header_tags, score_job, show_job
+from .graph import build_graph
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -36,80 +34,6 @@ def build_parser() -> argparse.ArgumentParser:
         "-o", "--out", default="improvement-plan.md", help="Output MD path"
     )
     return parser
-
-
-def _inconsistent(report: CritiqueReport) -> list:
-    """Return the findings the judge flagged as inconsistent with the description."""
-    return [f for f in report.findings if not f.is_consistent]
-
-
-def _print_plan(out_path: str) -> None:
-    """Print the improvement-plan contents to the terminal so the user can
-    review at the gate without opening the file."""
-    try:
-        content = pathlib.Path(out_path).read_text()
-    except OSError:
-        return
-    print("\n----- improvement plan -----", file=sys.stderr)
-    print(content, file=sys.stderr)
-    print("------------------------------\n", file=sys.stderr)
-
-
-def _check_header_tag(job: dict) -> object | None:
-    """Compare stored remote_type against LinkedIn's authoritative workplace
-    badge via `linkedin-jobs header-tags`. Returns a Finding on mismatch, or
-    None when the check couldn't run (no session / CLI error / API soft-miss)
-    or found no discrepancy. Status is printed to stderr so the user can see
-    the check ran even when it produces no Finding."""
-    job_id = job.get("id", "")
-    if not job_id:
-        return None
-    print("Critics: checking header tag via Voyager API...", file=sys.stderr)
-    ht = header_tags(job_id)
-    if ht is None:
-        print(
-            "  ! header-tags unavailable (no session or CLI error); skipping.",
-            file=sys.stderr,
-        )
-        return None
-    finding = header_tag_finding(job, ht)
-    if finding is None and ht.get("source") == "voyager_api":
-        print(
-            f"  header tag OK: stored remote_type matches LinkedIn's "
-            f"'{ht.get('remote_type', '')}'.",
-            file=sys.stderr,
-        )
-    elif finding is not None:
-        print(
-            f"  ! header-tag mismatch: stored "
-            f"'{job.get('remote_type') or '(none)'}' vs LinkedIn "
-            f"'{ht.get('remote_type', '')}'.",
-            file=sys.stderr,
-        )
-    return finding
-
-
-def _judge_and_write(job: dict, llm, out_path: str) -> CritiqueReport | None:
-    """Judge the job, write its improvement plan, and print the plan inline.
-    Returns the report, or None if judging failed (caller exits non-zero).
-
-    The LLM judge compares stored fields against the description body; the
-    header-tag check then compares stored remote_type against LinkedIn's
-    authoritative workplace badge (Voyager API). Findings from both are merged
-    into one report so a description-consistent value can still be flagged when
-    LinkedIn's structured badge disagrees."""
-    print(f"Critics: judging job {job.get('id', '?')}...", file=sys.stderr)
-    try:
-        report = judge_job(job, llm)
-    except Exception as e:  # structured-output / transport failure
-        print(f"  ! judge failed: {e}", file=sys.stderr)
-        return None
-    ht_finding = _check_header_tag(job)
-    if ht_finding is not None:
-        report.findings.append(ht_finding)
-    write_report([report], out_path)
-    _print_plan(out_path)
-    return report
 
 
 def _prompt_proceed() -> bool:
@@ -127,124 +51,27 @@ def main(argv: list[str] | None = None) -> int:
         print(str(e), file=sys.stderr)
         return 2
 
-    print(f"Critics: looking up job {args.job_id} in DB...", file=sys.stderr)
-    job = show_job(args.job_id)
-    if job is None:
-        print(
-            f"  not stored; fetching via `linkedin-jobs score-job {args.job_id}`...",
-            file=sys.stderr,
-        )
-        try:
-            job = score_job(args.job_id)
-        except RuntimeError as e:
-            print(str(e), file=sys.stderr)
-            return 1
-    else:
-        print("  found in DB.", file=sys.stderr)
+    graph = build_graph()
+    config = {
+        "configurable": {
+            "thread_id": f"critics-{args.job_id}-{os.getpid()}",
+            "llm": llm,
+        }
+    }
 
-    report = _judge_and_write(job, llm, args.out)
-    if report is None:
-        return 1
-    print(f"Wrote {args.out}", file=sys.stderr)
+    state = graph.invoke(
+        {"job_id": args.job_id, "out_path": args.out}, config
+    )
 
-    defects = _inconsistent(report)
-    if not defects:
-        print("No defects found; nothing to fix.", file=sys.stderr)
-        return 0
+    # Drive the human gate: each time the graph pauses at `gate`, prompt the
+    # user and resume with their decision. get_state().next is non-empty while
+    # the graph is paused at an interrupt; it goes empty once a terminal node
+    # has set rc and routed to END.
+    while graph.get_state(config).next:
+        decision = _prompt_proceed()
+        state = graph.invoke(Command(resume=decision), config)
 
-    # judge→fix→re-judge loop, user-gated each round.
-    # Round 1 starts a fresh opencode session; rounds 2+ RESUME it via
-    # --session <id> so the agent keeps its full transcript across rounds.
-    session_id: str | None = None
-    round_num = 0
-    while True:
-        round_num += 1
-        if not _prompt_proceed():
-            print("Stopping; no agent spawned.", file=sys.stderr)
-            return 0
-
-        try:
-            repo_path = sibling_cli_dir()
-        except FileNotFoundError as e:
-            print(str(e), file=sys.stderr)
-            return 1
-
-        prompt = build_handoff_prompt(report, round_num=round_num)
-        print(
-            f"\n----- opencode prompt (round {round_num}"
-            f"{', resuming session ' + session_id if session_id else ', new session'})"
-            f" -----",
-            file=sys.stderr,
-        )
-        print(prompt, file=sys.stderr)
-        print("-" * 60 + "\n", file=sys.stderr)
-        print(
-            f"Critics: launching opencode agent in {repo_path} "
-            f"(round {round_num})...",
-            file=sys.stderr,
-        )
-        print(
-            "  When the agent is done, EXIT opencode with /exit (or /q, or "
-            "Ctrl+x then q) to return to critics, which will re-score + "
-            "re-judge. Do NOT Ctrl+C — that kills critics too.",
-            file=sys.stderr,
-        )
-        version_before = cli_version()
-        try:
-            launch_agent_session(repo_path, prompt, session_id=session_id)
-        except KeyboardInterrupt:
-            print(
-                "\nCritics: agent session interrupted (Ctrl+C). "
-                "Stopping without re-score.",
-                file=sys.stderr,
-            )
-            return 1
-
-        # After round 1's session exits, capture its id so rounds 2+ can resume.
-        if session_id is None:
-            session_id = latest_session_id(repo_path)
-            if session_id is None:
-                print(
-                    "Critics: could not capture opencode session id; the next "
-                    "round will start a fresh session (no cross-round memory).",
-                    file=sys.stderr,
-                )
-
-        version_after = cli_version()
-        if version_after == version_before or version_after == "dev":
-            print(
-                f"Critics: linkedin-jobs version unchanged after agent session "
-                f"('{version_before}' -> '{version_after}'). The agent did not "
-                f"rebuild via `just build`; skipping re-score. Stopping.",
-                file=sys.stderr,
-            )
-            return 1
-
-        print(
-            f"Critics: re-scoring + re-judging job {args.job_id} "
-            f"(version {version_before} -> {version_after})...",
-            file=sys.stderr,
-        )
-        try:
-            job = score_job(args.job_id)
-        except RuntimeError as e:
-            print(str(e), file=sys.stderr)
-            return 1
-
-        report = _judge_and_write(job, llm, args.out)
-        if report is None:
-            return 1
-
-        defects = _inconsistent(report)
-        if not defects:
-            print(
-                "Critics: re-judge clean — all defects resolved. Stopping.",
-                file=sys.stderr,
-            )
-            return 0
-
-        # loop back: re-prompt with the fresh plan; next round resumes the
-        # captured opencode session and sends a concise follow-up prompt.
+    return state.get("rc", 0)
 
 
 if __name__ == "__main__":

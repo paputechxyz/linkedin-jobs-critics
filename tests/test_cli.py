@@ -2,7 +2,7 @@ import pathlib
 
 import pytest
 
-from critics import cli
+from critics import cli, graph
 from critics.judge import CritiqueReport, Finding
 
 
@@ -79,16 +79,16 @@ def loop(monkeypatch, tmp_path):
         return state.inputs.pop(0)
 
     monkeypatch.setattr(cli, "load_llm", lambda: "fake-llm")
-    monkeypatch.setattr(cli, "show_job", lambda jid: {"id": jid, "title": "Eng", "description": "d"})
-    monkeypatch.setattr(cli, "judge_job", fake_judge_job)
-    monkeypatch.setattr(cli, "header_tag_finding", lambda job, ht: None)
-    monkeypatch.setattr(cli, "header_tags", lambda jid: None)
-    monkeypatch.setattr(cli, "write_report", fake_write_report)
-    monkeypatch.setattr(cli, "score_job", fake_score_job)
-    monkeypatch.setattr(cli, "sibling_cli_dir", lambda: pathlib.Path("/fake/repo"))
-    monkeypatch.setattr(cli, "launch_agent_session", fake_launch)
-    monkeypatch.setattr(cli, "latest_session_id", fake_latest_session_id)
-    monkeypatch.setattr(cli, "cli_version", fake_cli_version)
+    monkeypatch.setattr(graph, "show_job", lambda jid: {"id": jid, "title": "Eng", "description": "d"})
+    monkeypatch.setattr(graph, "judge_job", fake_judge_job)
+    monkeypatch.setattr(graph, "header_tag_finding", lambda job, ht: None)
+    monkeypatch.setattr(graph, "header_tags", lambda jid: None)
+    monkeypatch.setattr(graph, "write_report", fake_write_report)
+    monkeypatch.setattr(graph, "score_job", fake_score_job)
+    monkeypatch.setattr(graph, "sibling_cli_dir", lambda: pathlib.Path("/fake/repo"))
+    monkeypatch.setattr(graph, "launch_agent_session", fake_launch)
+    monkeypatch.setattr(graph, "latest_session_id", fake_latest_session_id)
+    monkeypatch.setattr(graph, "cli_version", fake_cli_version)
     monkeypatch.setattr("builtins.input", fake_input)
 
     return state
@@ -142,7 +142,7 @@ def test_ctrl_c_during_session_stops_gracefully(monkeypatch, loop):
     def raise_kb(path, prompt, session_id=None):
         loop.launch_calls += 1
         raise KeyboardInterrupt
-    monkeypatch.setattr(cli, "launch_agent_session", raise_kb)
+    monkeypatch.setattr(graph, "launch_agent_session", raise_kb)
 
     rc = run_cli(loop)
 
@@ -291,8 +291,8 @@ def test_header_tag_mismatch_surfaces_when_judge_finds_nothing(monkeypatch, loop
         is_consistent=False,
         suggested_fix="scraper.go",
     )
-    monkeypatch.setattr(cli, "header_tag_finding", lambda job, ht: ht_finding)
-    monkeypatch.setattr(cli, "header_tags", lambda jid: {"source": "voyager_api", "remote_type": "remote"})
+    monkeypatch.setattr(graph, "header_tag_finding", lambda job, ht: ht_finding)
+    monkeypatch.setattr(graph, "header_tags", lambda jid: {"source": "voyager_api", "remote_type": "remote"})
 
     rc = run_cli(loop)
 
@@ -311,8 +311,8 @@ def test_header_tag_unavailable_does_not_block(monkeypatch, loop):
     flow proceeds normally without surfacing a header-tag finding."""
     loop.judge_reports = [_report([_finding("salary", consistent=True)])]
     loop.inputs = []
-    monkeypatch.setattr(cli, "header_tags", lambda jid: None)
-    monkeypatch.setattr(cli, "header_tag_finding", lambda job, ht: None)
+    monkeypatch.setattr(graph, "header_tags", lambda jid: None)
+    monkeypatch.setattr(graph, "header_tag_finding", lambda job, ht: None)
 
     rc = run_cli(loop)
 

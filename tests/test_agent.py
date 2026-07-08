@@ -205,3 +205,24 @@ def test_latest_session_id_none_on_failure(monkeypatch):
     monkeypatch.setattr(agent.subprocess, "run", lambda *a, **k: FakeProc())
     from pathlib import Path
     assert latest_session_id(Path("/fake/repo")) is None
+
+
+def test_latest_session_id_runs_opencode_with_repo_cwd(monkeypatch):
+    """opencode session list is scoped by cwd's project — latest_session_id
+    MUST run it from repo_path, not critics' own cwd, or it will only see
+    critics' sessions and miss the sibling-repo agent session."""
+    captured = {}
+
+    class FakeProc:
+        returncode = 0
+        stdout = json.dumps([{"id": "ses_aaa", "directory": "/fake/repo"}])
+
+    def fake_run(args, **kwargs):
+        captured["cwd"] = kwargs.get("cwd")
+        return FakeProc()
+
+    monkeypatch.setattr(agent.subprocess, "run", fake_run)
+    from pathlib import Path
+    latest_session_id(Path("/fake/repo"))
+
+    assert captured["cwd"] == "/fake/repo"

@@ -125,9 +125,15 @@ def latest_session_id(repo_path: Path) -> str | None:
 
     Used after round 1's session exits to capture the id so rounds 2+ can
     resume it via `launch_agent_session(..., session_id=...)`.
+
+    `opencode session list` is scoped by the current working directory's
+    project, so we MUST run it from `repo_path` — otherwise the call (issued
+    from critics' cwd) only lists critics' own sessions and never sees the
+    sibling-repo sessions launched by `launch_agent_session`.
     """
     proc = subprocess.run(
         ["opencode", "session", "list", "-n", "10", "--format", "json"],
+        cwd=str(repo_path),
         capture_output=True,
         text=True,
         encoding="utf-8",

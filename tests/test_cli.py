@@ -81,6 +81,8 @@ def loop(monkeypatch, tmp_path):
     monkeypatch.setattr(cli, "load_llm", lambda: "fake-llm")
     monkeypatch.setattr(cli, "show_job", lambda jid: {"id": jid, "title": "Eng", "description": "d"})
     monkeypatch.setattr(cli, "judge_job", fake_judge_job)
+    monkeypatch.setattr(cli, "header_tag_finding", lambda job, ht: None)
+    monkeypatch.setattr(cli, "header_tags", lambda jid: None)
     monkeypatch.setattr(cli, "write_report", fake_write_report)
     monkeypatch.setattr(cli, "score_job", fake_score_job)
     monkeypatch.setattr(cli, "sibling_cli_dir", lambda: pathlib.Path("/fake/repo"))
@@ -269,3 +271,52 @@ def test_regression_new_defect_in_round2_plan(loop):
     assert loop.write_calls == 2
     round2_report = loop.written_reports[1][0]
     assert any(f.field == "location" and not f.is_consistent for f in round2_report.findings)
+
+
+# --- header-tag check merges into the report even when the LLM judge is clean ---
+
+
+def test_header_tag_mismatch_surfaces_when_judge_finds_nothing(monkeypatch, loop):
+    """The motivating case: the LLM judge finds the stored fields consistent
+    with the description, but LinkedIn's authoritative workplace badge disagrees
+    with the stored remote_type. The header-tag finding must still surface so
+    the loop prompts the user to fix the parser."""
+    loop.judge_reports = [_report([_finding("salary", consistent=True)])]
+    loop.inputs = ["n"]  # decline agent; we only care that the defect is reported
+
+    ht_finding = Finding(
+        field="remote_type (header tag)",
+        stored_value="hybrid",
+        evidence_quote="LinkedIn Voyager API: remote_type='remote'",
+        is_consistent=False,
+        suggested_fix="scraper.go",
+    )
+    monkeypatch.setattr(cli, "header_tag_finding", lambda job, ht: ht_finding)
+    monkeypatch.setattr(cli, "header_tags", lambda jid: {"source": "voyager_api", "remote_type": "remote"})
+
+    rc = run_cli(loop)
+
+    # The header-tag finding was merged into the report, so defects are non-empty
+    # and the user is prompted (rather than the "nothing to fix" short-circuit).
+    assert rc == 0
+    assert loop.input_calls == 1
+    written = loop.written_reports[0][0]
+    assert any(
+        f.field == "remote_type (header tag)" and not f.is_consistent for f in written.findings
+    )
+
+
+def test_header_tag_unavailable_does_not_block(monkeypatch, loop):
+    """When header-tags can't run (no session / CLI error), the judge-only
+    flow proceeds normally without surfacing a header-tag finding."""
+    loop.judge_reports = [_report([_finding("salary", consistent=True)])]
+    loop.inputs = []
+    monkeypatch.setattr(cli, "header_tags", lambda jid: None)
+    monkeypatch.setattr(cli, "header_tag_finding", lambda job, ht: None)
+
+    rc = run_cli(loop)
+
+    assert rc == 0
+    assert loop.input_calls == 0
+    written = loop.written_reports[0][0]
+    assert all(f.field != "remote_type (header tag)" for f in written.findings)

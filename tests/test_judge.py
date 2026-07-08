@@ -4,6 +4,7 @@ from critics.judge import (
     _extract_json,
     _fmt_salary,
     _job_payload,
+    header_tag_finding,
     judge_job,
 )
 
@@ -122,3 +123,70 @@ def test_judge_job_raises_when_fallback_returns_no_json():
         assert "no JSON" in str(e)
     else:
         raise AssertionError("expected RuntimeError")
+
+
+# --- header_tag_finding (deterministic check vs LinkedIn's Voyager badge) ---
+
+
+def _ht(remote_type="remote", urns=None, source="voyager_api", work_remote=True):
+    return {
+        "job_id": "4259504707",
+        "workplace_type_urns": urns if urns is not None else ["urn:li:fs_workplaceType:2"],
+        "work_remote_allowed": work_remote,
+        "remote_type": remote_type,
+        "source": source,
+    }
+
+
+def test_header_tag_finding_flags_mismatch():
+    job = {"id": "4259504707", "remote_type": "hybrid"}
+    f = header_tag_finding(job, _ht(remote_type="remote"))
+    assert f is not None
+    assert f.is_consistent is False
+    assert f.field == "remote_type (header tag)"
+    assert f.stored_value == "hybrid"
+    assert "remote" in f.evidence_quote
+    assert "urn:li:fs_workplaceType:2" in f.evidence_quote
+    assert "scraper.go" in f.suggested_fix
+
+
+def test_header_tag_finding_case_insensitive():
+    job = {"id": "1", "remote_type": "Hybrid"}
+    assert header_tag_finding(job, _ht(remote_type="REMOTE")) is not None
+
+
+def test_header_tag_finding_none_when_agree():
+    job = {"id": "1", "remote_type": "remote"}
+    assert header_tag_finding(job, _ht(remote_type="remote")) is None
+
+
+def test_header_tag_finding_none_when_no_header_data():
+    assert header_tag_finding({"id": "1", "remote_type": "hybrid"}, None) is None
+
+
+def test_header_tag_finding_none_when_api_soft_missed():
+    # source != "voyager_api" -> the API couldn't answer; can't verify.
+    assert (
+        header_tag_finding(
+            {"id": "1", "remote_type": "hybrid"}, _ht(source="")
+        )
+        is None
+    )
+
+
+def test_header_tag_finding_none_when_linkedin_says_nothing():
+    # API succeeded but no workplace signal -> no basis to flag.
+    assert (
+        header_tag_finding(
+            {"id": "1", "remote_type": "hybrid"},
+            _ht(remote_type="", urns=[], work_remote=False),
+        )
+        is None
+    )
+
+
+def test_header_tag_finding_handles_missing_stored_remote_type():
+    job = {"id": "1"}  # no remote_type key
+    f = header_tag_finding(job, _ht(remote_type="remote"))
+    assert f is not None
+    assert f.stored_value == "(none)"

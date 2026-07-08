@@ -40,7 +40,7 @@ def write_report(reports: list[CritiqueReport], out_path: str) -> Path:
         lines.append(f"### {r.title} (`{r.job_id}`) - {f.field}")
         lines.append("")
         lines.append(f"- **Stored value:** {f.stored_value}")
-        lines.append(f"- **Evidence (from description):** > {f.evidence_quote}")
+        lines.append(f"- **Evidence:** > {f.evidence_quote}")
         if f.suggested_fix:
             lines.append(f"- **Suggested fix:** {f.suggested_fix}")
         lines.append("")

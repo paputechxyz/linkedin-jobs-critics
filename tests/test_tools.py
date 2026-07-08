@@ -115,9 +115,55 @@ def test_cli_version_passes_version_subcommand(monkeypatch):
 
 
 def test_cli_version_returns_empty_on_failure(monkeypatch):
-    monkeypatch.setattr(
-        tools,
-        "_run",
-        lambda args, timeout=30: FakeProc(stderr="boom", returncode=1),
-    )
-    assert tools.cli_version() == ""
+	monkeypatch.setattr(
+		tools,
+		"_run",
+		lambda args, timeout=30: FakeProc(stderr="boom", returncode=1),
+	)
+	assert tools.cli_version() == ""
+
+
+# --- header_tags ---
+
+
+def test_header_tags_returns_dict(monkeypatch):
+	ht = {
+		"job_id": "4259504707",
+		"workplace_type_urns": ["urn:li:fs_workplaceType:2"],
+		"work_remote_allowed": True,
+		"remote_type": "remote",
+		"source": "voyager_api",
+	}
+	monkeypatch.setattr(tools, "_run", lambda args, timeout=60: FakeProc(stdout=json.dumps(ht)))
+	assert tools.header_tags("4259504707") == ht
+
+
+def test_header_tags_passes_id_and_json_flags(monkeypatch):
+	captured = {}
+
+	def fake_run(args, timeout=60):
+		captured["args"] = args
+		return FakeProc(stdout=json.dumps({"source": "voyager_api"}))
+
+	monkeypatch.setattr(tools, "_run", fake_run)
+	tools.header_tags("4259504707")
+
+	assert captured["args"] == ["header-tags", "4259504707", "--json"]
+
+
+def test_header_tags_returns_none_when_not_stored(monkeypatch):
+	# non-zero exit (e.g. no session) -> treated as a soft skip
+	monkeypatch.setattr(
+		tools, "_run", lambda args, timeout=60: FakeProc(stderr="no session", returncode=1)
+	)
+	assert tools.header_tags("999") is None
+
+
+def test_header_tags_returns_none_on_empty_stdout(monkeypatch):
+	monkeypatch.setattr(tools, "_run", lambda args, timeout=60: FakeProc(stdout=""))
+	assert tools.header_tags("999") is None
+
+
+def test_header_tags_returns_none_on_non_json(monkeypatch):
+	monkeypatch.setattr(tools, "_run", lambda args, timeout=60: FakeProc(stdout="not json"))
+	assert tools.header_tags("999") is None

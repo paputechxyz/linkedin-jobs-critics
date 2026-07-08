@@ -21,9 +21,9 @@ from .agent import (
     sibling_cli_dir,
 )
 from .config import NoProviderError, load_llm
-from .judge import CritiqueReport, judge_job
+from .judge import CritiqueReport, header_tag_finding, judge_job
 from .report import write_report
-from .tools import cli_version, score_job, show_job
+from .tools import cli_version, header_tags, score_job, show_job
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -55,15 +55,58 @@ def _print_plan(out_path: str) -> None:
     print("------------------------------\n", file=sys.stderr)
 
 
+def _check_header_tag(job: dict) -> object | None:
+    """Compare stored remote_type against LinkedIn's authoritative workplace
+    badge via `linkedin-jobs header-tags`. Returns a Finding on mismatch, or
+    None when the check couldn't run (no session / CLI error / API soft-miss)
+    or found no discrepancy. Status is printed to stderr so the user can see
+    the check ran even when it produces no Finding."""
+    job_id = job.get("id", "")
+    if not job_id:
+        return None
+    print("Critics: checking header tag via Voyager API...", file=sys.stderr)
+    ht = header_tags(job_id)
+    if ht is None:
+        print(
+            "  ! header-tags unavailable (no session or CLI error); skipping.",
+            file=sys.stderr,
+        )
+        return None
+    finding = header_tag_finding(job, ht)
+    if finding is None and ht.get("source") == "voyager_api":
+        print(
+            f"  header tag OK: stored remote_type matches LinkedIn's "
+            f"'{ht.get('remote_type', '')}'.",
+            file=sys.stderr,
+        )
+    elif finding is not None:
+        print(
+            f"  ! header-tag mismatch: stored "
+            f"'{job.get('remote_type') or '(none)'}' vs LinkedIn "
+            f"'{ht.get('remote_type', '')}'.",
+            file=sys.stderr,
+        )
+    return finding
+
+
 def _judge_and_write(job: dict, llm, out_path: str) -> CritiqueReport | None:
     """Judge the job, write its improvement plan, and print the plan inline.
-    Returns the report, or None if judging failed (caller exits non-zero)."""
+    Returns the report, or None if judging failed (caller exits non-zero).
+
+    The LLM judge compares stored fields against the description body; the
+    header-tag check then compares stored remote_type against LinkedIn's
+    authoritative workplace badge (Voyager API). Findings from both are merged
+    into one report so a description-consistent value can still be flagged when
+    LinkedIn's structured badge disagrees."""
     print(f"Critics: judging job {job.get('id', '?')}...", file=sys.stderr)
     try:
         report = judge_job(job, llm)
     except Exception as e:  # structured-output / transport failure
         print(f"  ! judge failed: {e}", file=sys.stderr)
         return None
+    ht_finding = _check_header_tag(job)
+    if ht_finding is not None:
+        report.findings.append(ht_finding)
     write_report([report], out_path)
     _print_plan(out_path)
     return report

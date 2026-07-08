@@ -48,6 +48,22 @@ def show_job(job_id: str) -> dict | None:
     return _parse_job(proc)
 
 
+def header_tags(job_id: str) -> dict | None:
+    """Return the authoritative workplace-type header tag for a job via
+    `linkedin-jobs header-tags <id> --json`, or None on any CLI failure
+    (non-zero exit, empty/non-JSON output). The returned dict carries the
+    Voyager API's workplace_type_urns, work_remote_allowed, derived
+    remote_type, and source. None means the check could not run — typically a
+    missing LinkedIn session — and callers should treat it as a soft skip."""
+    proc = _run(["header-tags", str(job_id), "--json"], timeout=60)
+    if proc.returncode != 0 or not proc.stdout.strip():
+        return None
+    try:
+        return json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return None
+
+
 def score_job(job_id: str) -> dict:
     """Fetch + score a single LinkedIn job by id via `linkedin-jobs score-job
     <id> --json`. Always (re-)fetches and (re-)scores. Raises RuntimeError on

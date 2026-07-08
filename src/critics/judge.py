@@ -97,6 +97,43 @@ def _extract_json(text: str) -> str | None:
     return None
 
 
+def header_tag_finding(job: dict, header_tags: dict | None) -> Finding | None:
+    """Build a Finding when the stored remote_type disagrees with LinkedIn's
+    authoritative workplace-type badge (the "header tag" from the Voyager
+    jobPostings API).
+
+    Returns None when the check is inconclusive — no header-tag data, the API
+    soft-missed (no source), or LinkedIn returned no workplace signal — or when
+    the stored value agrees with the badge. Only real mismatches surface, so
+    the report stays focused on actionable defects.
+    """
+    if not header_tags or header_tags.get("source") != "voyager_api":
+        return None
+    live = (header_tags.get("remote_type") or "").strip().lower()
+    if not live:
+        return None
+    stored = (job.get("remote_type") or "").strip().lower()
+    if stored == live:
+        return None
+    urns = header_tags.get("workplace_type_urns") or []
+    return Finding(
+        field="remote_type (header tag)",
+        stored_value=job.get("remote_type") or "(none)",
+        evidence_quote=(
+            f"LinkedIn Voyager jobPostings API: workplace_type_urns={urns}, "
+            f"work_remote_allowed={header_tags.get('work_remote_allowed')}, "
+            f"remote_type='{live}'."
+        ),
+        is_consistent=False,
+        suggested_fix=(
+            "Parser's DetectRemote heuristic overrode the authoritative "
+            "workplaceTypes badge; prefer fetchJobPostingViaAPI's workplace "
+            "type when the Voyager call succeeds. See internal/linkedin/"
+            "scraper.go (DetectRemote at ingest + the API-fallback guard)."
+        ),
+    )
+
+
 def judge_job(job: dict, llm: ChatOpenAI) -> CritiqueReport:
     messages = [
         {"role": "system", "content": JUDGE_SYSTEM},

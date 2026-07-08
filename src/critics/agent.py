@@ -57,14 +57,15 @@ def build_handoff_prompt(report: CritiqueReport, round_num: int = 1) -> str:
             f"You are fixing parsing defects in the linkedin-jobs Go CLI "
             f"for job {report.job_id} ({report.title}).",
             "",
-            "The following parsed fields are inconsistent with the job's full "
-            "description (the ground truth):",
+            "The following parsed fields are inconsistent with the job's ground "
+            "truth (the description body, or LinkedIn's authoritative workplace "
+            "badge for remote_type header-tag findings):",
             "",
         ]
         for f in inconsistent:
             lines.append(f"- field: {f.field}")
             lines.append(f"  stored value: {f.stored_value}")
-            lines.append(f"  evidence (from description): {f.evidence_quote}")
+            lines.append(f"  evidence: {f.evidence_quote}")
             if f.suggested_fix:
                 lines.append(f"  suggested fix location: {f.suggested_fix}")
             lines.append("")
@@ -80,12 +81,12 @@ def build_handoff_prompt(report: CritiqueReport, round_num: int = 1) -> str:
     lines = [
         f"Round {round_num}: critics re-judged the job after the previous "
         f"agent round, and these fields are STILL inconsistent with the "
-        f"description:",
+        f"ground truth:",
         "",
     ]
     for f in inconsistent:
         lines.append(f"- {f.field}: stored '{f.stored_value}'")
-        lines.append(f"  evidence (from description): {f.evidence_quote}")
+        lines.append(f"  evidence: {f.evidence_quote}")
         if f.suggested_fix:
             lines.append(f"  suggested fix location: {f.suggested_fix}")
     lines.append("")

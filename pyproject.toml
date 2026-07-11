@@ -12,6 +12,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+tracing = ["langsmith>=0.1"]
 
 [project.scripts]
 critics = "critics.cli:main"

@@ -20,6 +20,12 @@ Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/) (or pip).
 uv sync            # or: python -m venv .venv && .venv/bin/pip install -e ".[dev]"
 ```
 
+For LangSmith tracing (optional), install the extra:
+
+```bash
+uv sync --extra tracing   # or: pip install -e ".[tracing]"
+```
+
 Build the Go CLI and put it on your `PATH` (or set `LJ_BIN_PATH`):
 
 ```bash
@@ -74,6 +80,31 @@ critics never commits — you commit manually in `linkedin-job-cli`.
 | `LJ_LLM_MODEL` | model name | `gpt-4o-mini` |
 
 The provider config is reused from the Go CLI's `~/.linkedin-jobs/config.json` — one key store.
+
+## Tracing with LangSmith
+
+Critics lights up [LangSmith](https://smith.langchain.com) tracing automatically
+as soon as a LangSmith API key is in the environment — no code changes needed.
+Every LLM call, the LangGraph step transitions, and the `judge_job` span land
+in your project so you can inspect prompts, responses, token usage, and errors.
+
+```bash
+export LANGSMITH_API_KEY=lsv2_sk_...
+uv run critics 4259504707 -o improvement-plan.md
+# -> "Tracing enabled (LangSmith project: linkedin-jobs-critics)."
+```
+
+Runs the trace to the `linkedin-jobs-critics` project by default. Override with
+`LANGSMITH_PROJECT`. No key? Critics runs normally, just untraced.
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `LANGSMITH_API_KEY` (or `LANGCHAIN_API_KEY`) | LangSmith API key; enables tracing when set | unset = tracing off |
+| `LANGSMITH_PROJECT` (or `LANGCHAIN_PROJECT`) | project name runs are logged under | `linkedin-jobs-critics` |
+| `LANGSMITH_TRACING` | force tracing on/off | `true` once a key is present |
+
+To view traces, open the project at
+`https://smith.langchain.com/<your-org>/projects/p/<project>`.
 
 ## Test
 

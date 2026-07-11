@@ -20,7 +20,7 @@ import sys
 
 from langgraph.types import Command
 
-from .config import NoProviderError, load_llm
+from .config import NoProviderError, load_llm, setup_tracing
 from .graph import build_graph
 
 
@@ -44,6 +44,14 @@ def _prompt_proceed() -> bool:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+
+    if setup_tracing():
+        project = (
+            os.environ.get("LANGSMITH_PROJECT")
+            or os.environ.get("LANGCHAIN_PROJECT")
+            or "linkedin-jobs-critics"
+        )
+        print(f"Tracing enabled (LangSmith project: {project}).", file=sys.stderr)
 
     try:
         llm = load_llm()

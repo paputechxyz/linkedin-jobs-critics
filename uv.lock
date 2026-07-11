@@ -460,12 +460,16 @@ dependencies = [
 dev = [
     { name = "pytest" },
 ]
+tracing = [
+    { name = "langsmith" },
+]
 
 [package.metadata]
 requires-dist = [
     { name = "langchain", specifier = ">=1.3" },
     { name = "langchain-openai", specifier = ">=1.3" },
     { name = "langgraph", specifier = ">=1.2.8" },
+    { name = "langsmith", marker = "extra == 'tracing'", specifier = ">=0.1" },
     { name = "pydantic", specifier = ">=2" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
 ]

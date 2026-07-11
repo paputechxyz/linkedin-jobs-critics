@@ -14,6 +14,7 @@ from langchain_openai import ChatOpenAI
 
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_MODEL = "gpt-4o-mini"
+DEFAULT_TRACING_PROJECT = "linkedin-jobs-critics"
 
 
 class NoProviderError(RuntimeError):
@@ -64,3 +65,25 @@ def load_llm() -> ChatOpenAI:
         "no LLM provider configured: run `linkedin-jobs config llm`, "
         "or set OPENAI_API_KEY / LJ_LLM_API_KEY"
     )
+
+
+def setup_tracing() -> bool:
+    """Enable LangSmith tracing when an API key is present.
+
+    LangChain/LangGraph auto-trace once LANGSMITH_API_KEY is set; this helper
+    just fills in sane defaults (project name, tracing on) so a user only has
+    to export the key. Idempotent — uses setdefault so explicit env vars win.
+
+    Returns True when tracing will be active, False when no key is configured
+    (the app runs normally, just untraced).
+    """
+    key = os.environ.get("LANGSMITH_API_KEY") or os.environ.get("LANGCHAIN_API_KEY")
+    if not key:
+        return False
+    os.environ.setdefault("LANGSMITH_API_KEY", key)
+    os.environ.setdefault("LANGCHAIN_API_KEY", key)  # back-compat for older langchain
+    os.environ.setdefault("LANGSMITH_TRACING", "true")
+    os.environ.setdefault("LANGCHAIN_TRACING", "true")
+    os.environ.setdefault("LANGSMITH_PROJECT", DEFAULT_TRACING_PROJECT)
+    os.environ.setdefault("LANGCHAIN_PROJECT", DEFAULT_TRACING_PROJECT)
+    return True

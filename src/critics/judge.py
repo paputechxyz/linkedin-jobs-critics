@@ -14,6 +14,18 @@ from pydantic import BaseModel, Field, ValidationError
 from langchain_core.exceptions import OutputParserException
 from langchain_openai import ChatOpenAI
 
+try:  # optional: rich named spans in LangSmith when the `tracing` extra is installed
+    from langsmith import traceable
+except ImportError:  # pragma: no cover - langsmith is a transitive dep, fallback is a no-op
+    def traceable(*dargs, **dkwargs):
+        if callable(dargs[0]):
+            return dargs[0]
+
+        def _wrap(fn):
+            return fn
+
+        return _wrap
+
 PARSED_FIELDS = ("salary", "location", "remote_type", "title", "company")
 
 JUDGE_SYSTEM = (
@@ -134,6 +146,7 @@ def header_tag_finding(job: dict, header_tags: dict | None) -> Finding | None:
     )
 
 
+@traceable(name="judge_job")
 def judge_job(job: dict, llm: ChatOpenAI) -> CritiqueReport:
     messages = [
         {"role": "system", "content": JUDGE_SYSTEM},

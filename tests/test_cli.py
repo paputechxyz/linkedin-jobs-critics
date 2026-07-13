@@ -98,6 +98,93 @@ def run_cli(state, job_id="1"):
     return cli.main([job_id, "-o", state.out_path])
 
 
+# --- arg parsing: comma-separated ids ---
+
+
+def test_parse_job_ids_single():
+    assert cli._parse_job_ids("4259504707") == ["4259504707"]
+
+
+def test_parse_job_ids_multiple():
+    assert cli._parse_job_ids("123,456,789") == ["123", "456", "789"]
+
+
+def test_parse_job_ids_strips_whitespace():
+    assert cli._parse_job_ids(" 123 , 456 ,789 ") == ["123", "456", "789"]
+
+
+def test_parse_job_ids_dedupes():
+    assert cli._parse_job_ids("123,456,123") == ["123", "456"]
+
+
+def test_parse_job_ids_drops_empties():
+    assert cli._parse_job_ids("123,,456,") == ["123", "456"]
+
+
+def test_main_rejects_empty_id_list(capsys, monkeypatch):
+    monkeypatch.setattr(cli, "load_llm", lambda: "fake-llm")
+    rc = cli.main([",,", "-o", "x.md"])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "No job ids" in err
+
+
+def test_main_runs_loop_for_each_job(loop):
+    """A comma-separated id list drives the graph once per id."""
+    # Two jobs, both judged clean on the first pass (no defects, no prompt).
+    loop.judge_reports = [
+        _report([_finding("salary", consistent=True)]),
+        _report([_finding("salary", consistent=True)]),
+    ]
+
+    rc = cli.main(["1,2", "-o", loop.out_path])
+
+    assert rc == 0
+    # One judge call per id
+    assert loop.judge_calls == 2
+    assert loop.write_calls == 2
+    # No gating since both are clean
+    assert loop.input_calls == 0
+
+
+def test_main_short_circuits_on_keyboard_interrupt(monkeypatch, loop):
+    """A Ctrl+C in a later job stops the whole run instead of moving on."""
+    loop.judge_reports = [
+        _report([_finding("salary", consistent=True)]),
+        _report([_finding("salary", consistent=True)]),
+    ]
+
+    def boom(graph, job_id, llm, out_path):
+        if job_id == "2":
+            raise KeyboardInterrupt
+        return 0
+
+    monkeypatch.setattr(cli, "_drive_loop", boom)
+
+    rc = cli.main(["1,2", "-o", loop.out_path])
+
+    assert rc == 130
+
+
+def test_main_aggregates_failure_rc(loop, monkeypatch):
+    """If one job fails and the rest succeed, the overall rc is non-zero."""
+    loop.judge_reports = [
+        _report([_finding("salary", consistent=True)]),
+        _report([_finding("salary", consistent=True)]),
+    ]
+
+    seq = iter([1, 0])  # job 1 fails, job 2 succeeds
+
+    def fake_drive(graph, job_id, llm, out_path):
+        return next(seq)
+
+    monkeypatch.setattr(cli, "_drive_loop", fake_drive)
+
+    rc = cli.main(["1,2", "-o", loop.out_path])
+
+    assert rc == 1
+
+
 # --- gating (R1, R2, R14) ---
 
 

@@ -53,7 +53,14 @@ The loop hands parser defects to a coding agent in the sibling repo. It needs th
 uv run critics 4259504707 -o improvement-plan.md
 ```
 
-If the job is already in the DB it is judged immediately; otherwise critics runs
+Pass one or more job ids, comma-separated; each runs its own judge→fix→re-judge
+loop in turn:
+
+```bash
+uv run critics 4259504707,4259504708,4259504709 -o improvement-plan.md
+```
+
+If a job is already in the DB it is judged immediately; otherwise critics runs
 `linkedin-jobs score-job <id>` to fetch + score it first, then judges it.
 
 If the plan lists defects and you answer `y` at the prompt, an opencode TUI opens

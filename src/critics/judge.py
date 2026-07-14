@@ -36,6 +36,12 @@ JUDGE_SYSTEM = (
     "(e.g. salary often comes from the page's rounded card band while the real "
     "base salary is in the description body — point at the salary source). "
     "Assess every one of: salary, location, remote_type, title, company. "
+    "Be lenient on title and company: treat them as consistent when any "
+    "difference is purely cosmetic — a typo, misspelling, case change, "
+    "punctuation, trailing legal suffix (e.g. 'Inc.', 'LLC', 'Ltd.'), or a "
+    "minor abbreviation/expansion (e.g. 'Sr.' vs 'Senior'). Only mark title or "
+    "company inconsistent for a substantive mismatch (a genuinely different "
+    "role level/duty, or a different organization). "
     "Respond in JSON."
 )
 

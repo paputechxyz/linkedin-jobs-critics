@@ -12,6 +12,97 @@ Given a LinkedIn **job id**, critics:
 4. **Improvement-plan MD** lists each defect with the stored value, a verbatim quote from the description as evidence, and the source location to fix. If nothing is wrong, it says so and exits.
 5. **Agent loop (optional)** — if defects are found, prompts `Proceed to spawn opencode agent? [y/N]`. On yes, hands the defects to an interactive [opencode](https://opencode.ai) session in the sibling `linkedin-job-cli` repo. When you exit opencode, critics re-scores + re-judges; clean ends the loop, still-defective writes a fresh plan and re-prompts. Each round carries prior-round history so the agent doesn't repeat dead ends.
 
+## How the judge works
+
+The judge (`src/critics/judge.py`, `judge_job`) is a single tool-less LLM call that asks one question: *for each parsed field, does the stored value agree with the job's full description (the ground truth)?*
+
+### Inputs
+
+The job dict from the local DB is flattened into one user message (`_job_payload`):
+
+- the five parsed fields under review — `salary`, `location`, `remote_type`, `title`, `company` (their current stored values, with salary rendered from `salary_raw` / `salary_low`–`salary_high` + currency)
+- the full LinkedIn `description`, pasted verbatim as the ground truth
+
+### Structured output, provider-enforced
+
+The LLM is bound to a Pydantic schema via `ChatOpenAI.with_structured_output(CritiqueReport, method="json_mode")`, so the provider is forced to return JSON matching the schema rather than free-form text that critics then has to parse:
+
+```python
+class Finding(BaseModel):
+    field: str                    # salary | location | remote_type | title | company
+    stored_value: str             # the value currently in the DB
+    evidence_quote: str           # verbatim quote from the description
+    is_consistent: bool           # True = stored value agrees with the description
+    suggested_fix: str | None     # when inconsistent, the source location to fix
+
+class CritiqueReport(BaseModel):
+    job_id: str
+    title: str
+    findings: list[Finding]       # one entry per parsed field
+```
+
+If the provider rejects `json_mode` or returns malformed JSON (`OutputParserException` / `ValidationError` / `ValueError`), critics falls back to a second invocation that appends a "respond with ONLY a JSON object" instruction, then regex-extracts the first `{...}` block (handling both ```json fenced and bare JSON) and validates it against the same schema. This keeps the judge working against endpoints (e.g. some z.ai / glm-5.2 deployments) that don't honor structured-output modes.
+
+### What the system prompt asks for
+
+The system prompt (`JUDGE_SYSTEM`) instructs the model to:
+
+- assess **every one of** salary, location, remote_type, title, company — no field skipped
+- quote the description **verbatim** as evidence (so a human can verify the call)
+- when inconsistent, name **where the value should be sourced/fixed** — e.g. "salary often comes from the page's rounded card band while the real base salary is in the description body"
+- be **lenient on `title` and `company`**: treat them as consistent when the difference is purely cosmetic — typo, misspelling, case, punctuation, trailing legal suffix (`Inc.`, `LLC`, `Ltd.`), or minor abbreviation/expansion (`Sr.` vs `Senior`). Only flag a substantive mismatch (genuinely different role level/duty, or a different organization).
+- be **lenient on `salary` when the description is silent on pay**: mark it consistent — the stored salary is sourced from LinkedIn's salary card (a separate employer-provided structured field), not the description body, so the body's silence is not a defect. Only flag salary when the body explicitly states a pay figure that materially contradicts the stored value. This kills the false-positive class where a card-sourced salary had no body corroboration.
+
+### Header-tag cross-check (non-LLM, layered on after)
+
+After the LLM judge returns, critics runs a deterministic check (`header_tag_finding`) against LinkedIn's Voyager `jobPostings` API via `linkedin-jobs header-tags <id>`. The API returns the authoritative `workplaceTypes` badge (On-site / Hybrid / Remote). If the stored `remote_type` disagrees with that badge — and only then — an extra `remote_type (header tag)` Finding is appended to the report, pointing the fix at `internal/linkedin/scraper.go` (`DetectRemote` heuristic + the API-fallback guard). The check is conservative: no Finding is added when the API soft-missed (no `voyager_api` source), returned no workplace signal, or the stored value already matches.
+
+### What you get back
+
+A `CritiqueReport` with one `Finding` per field. The improvement-plan MD lists only the inconsistent ones (`report.py:write_report`), each with stored value, evidence quote, and suggested fix; consistent fields are counted in the summary line. The graph then routes on whether *any* finding has `is_consistent=False`.
+
+## The judge→fix→re-judge graph
+
+The loop is a LangGraph state machine (`src/critics/graph.py`). Seven nodes, wired so that any node can short-circuit to `END` by setting `rc`; otherwise control flows to the next node. `rescore` loops back to `gate`, which is the actual fix→re-judge cycle.
+
+```mermaid
+stateDiagram-v2
+    [*] --> load_job
+    load_job --> judge: rc unset
+    load_job --> [*]: rc=1 (fetch failed)
+
+    judge --> gate: defects found
+    judge --> [*]: clean, or judge failed
+
+    gate --> pre_check: user answered y
+    gate --> [*]: user answered N
+    note right of gate: interrupt() — pauses the graph\nuntil cli resumes with Command(resume=bool)
+
+    pre_check --> run_agent: rc unset
+    pre_check --> [*]: rc=1 (no sibling repo)
+
+    run_agent --> post_check: agent exited cleanly
+    run_agent --> [*]: rc=1 (Ctrl+C)
+
+    post_check --> rescore: version bumped
+    post_check --> [*]: version unchanged / dev\n(agent skipped `just build`)
+
+    rescore --> gate: defects remain
+    rescore --> [*]: clean, or re-score failed
+```
+
+| Node | Job |
+|---|---|
+| `load_job` | `linkedin-jobs show <id> --json`; falls back to `score-job` if missing |
+| `judge` | runs `judge_job` (above) + header-tag cross-check, writes the plan MD |
+| `gate` | `interrupt()` — pauses for the user's `[y/N]`; `cli.py` resumes with `Command(resume=...)` |
+| `pre_check` | resolves the sibling repo, builds the handoff prompt (with prior-round history), records `linkedin-jobs version` before |
+| `run_agent` | spawns the interactive opencode TUI in `../linkedin-job-cli`; captures the session id for the next round |
+| `post_check` | re-reads `linkedin-jobs version`; rejects the round if unchanged or still `dev` |
+| `rescore` | `score-job` to re-fetch, then `judge_job` again on every field (so regressions surface); loops back to `gate` if defects remain |
+
+The conditional edges all use the same helper (`_route_by_rc`): if `rc` is set in state, go to `END`; otherwise continue. The checkpointer is an in-memory `MemorySaver` (required for `interrupt()`), with a whitelisted serde so the `CritiqueReport` round-trips cleanly.
+
 ## Install
 
 Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/) (or pip).

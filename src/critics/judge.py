@@ -42,6 +42,12 @@ JUDGE_SYSTEM = (
     "minor abbreviation/expansion (e.g. 'Sr.' vs 'Senior'). Only mark title or "
     "company inconsistent for a substantive mismatch (a genuinely different "
     "role level/duty, or a different organization). "
+    "Be lenient on salary when the description does not mention pay: mark it "
+    "consistent — the stored salary is sourced from LinkedIn's salary card (a "
+    "separate employer-provided structured field), not the description body, "
+    "so the body's silence is not evidence of a defect. Only flag salary "
+    "inconsistent when the body explicitly states a pay figure that "
+    "materially contradicts the stored value. "
     "Respond in JSON."
 )
 
